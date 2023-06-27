@@ -1,0 +1,311 @@
+---
+title: "Analysis of NYC Shooting Incidents from 2006 to 2022"
+author: "S. Mullin"
+output: html_document
+date: "2023-06-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r load-packages, include=FALSE}
+library(dplyr)
+library(magrittr)
+library(knitr)
+library(lubridate)
+library(ggplot2)
+```
+
+## Part 1: Executive Summary
+
+The data was first analyzed based on shootings per year and further broken down into the following categories: shootings by borough, shootings by the victims' age, sex and race. Finally, the shootings were broken down into the days of the week on which they occured. 
+Preliminary findings show that shootings peaked in 2006, and fell almost steadily year over year until 2019.  There was a sharp increase in shootings in 2020, and a slow decline in 2021 and 2022. We found that most shootings happened in Brooklyn and the Bronx. We also found that most victims were under the age of 44, male and predominantly black.  Most shootings occured on the weekend, from Friday to Sunday, peaking on Sunday.
+
+Additional research is necessary to understand why there was a sudden increase in 2020, why more victims are young, black males, and what hours of the day most shootings occur.  We could then classify these hours as the most dangerous and advise individuals to stay indoors during these times, especially in Brooklyn and the Bronx. 
+
+A simple regression model using the variables Week Day and Borough were created.  The adjusted R squared value is 93.13%.  This means that these two inputs explain over 93% of variance in the target field. 
+
+## Part 2: Importing the data to be analyzed
+
+The data is freely available on the City of New York website.  Available data at time of publication of this study ranged from 2006 to 2022.  Links to data is provided for readers' interest and for reproducibility purposes. 
+
+Links to data:
+<https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>
+and
+<https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8>
+
+```{r getting the data}
+
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPDdf <- read.csv(url) 
+column_names <- names(NYPDdf)
+names(NYPDdf) <-  c("key","date","time","boro","location","precint","jurcode","locclass","locdesc","murflag","perpage","perpsex","perprace","vicage","vicsex","vicrace","x","y",
+"lat","long","lonlat")
+```
+
+## Part 3: Data Wrangling and Cleaning
+
+The data contained columns that were superfluous for the scope of this study, was organized in a manner that was not considered 'tidy' for R analysis, and had many missing values.  The following steps were taken to clean the data:
+
+<font size="5"> Step 1: Removing unwanted columns </font>
+
+Longitude and Latitude were considered irrelevant for this study. These columns were removed. 
+
+```{r removing columns,}
+NYPDdf <- NYPDdf[,-which( names(NYPDdf) %in% c("x", "y", "lat","long","lonlat" ) )]
+```
+<font size="5"> Step 2: Standardize Date and Time </font>
+
+<font size="3"> Step 2a: Change Date and Time Format </font>
+
+The dates were stored in character form, which makes analysis difficult. They were converted to standard date form using lubridate. 
+
+```{r standardizing data,}
+NYPDdf$date <- NYPDdf$date %>% as.Date("%m/%d/%Y")
+NYPDdf$time <- NYPDdf$time %>% hms()
+```
+
+<font size="3"> Step 2b: Breakdown into Year, Month, Weekday </font>
+
+The date format was expanded so that we could analyze the data by year, month and weekday, respectively. 
+
+```{r standardizing time,}
+NYPDdf$year <- NYPDdf$date %>% format("%Y") %>% as.numeric() # as.factor()
+NYPDdf$yearmonth <- NYPDdf$date %>% format("%Y%m") %>% as.numeric() # %>% as.factor()
+NYPDdf$month <- NYPDdf$date %>% format("%m") %>% as.numeric() # %>% as.factor()
+NYPDdf$weekDay <- NYPDdf$date %>% weekdays() %>% as.factor()
+```
+<font size="5"> Step 3: Dealing with missing data </font>
+
+There seems to be a lot of missing data for the columns "locclass", "locdesc", "perpage", "perprace", and "perpsex".  The latter two columns seems to make sense that there would be lots of missing information if the perpetratory was never caught.  Since our main goals of the study focus on the victims, their ages, sex and ethnicity, we can simply deal with these columns by dropping them from our analysis.  We will also drop the key and location precint and jurcode columns since they do not help our study...
+
+```{r removing more unnecessary columns,}
+NYPDdf <- NYPDdf[,-which( names(NYPDdf) %in% c("key", "location", "precint", "jurcode","locclass","locdesc", "perpage", "perprace", "perpsex" ) )]
+```
+
+The column vicage has both "UNKNOWN" values and at least 1 value = "1022". The column vicrace has "UNKNOWN" values and the column vicsex has 'U' values. We shall remove them as follows:
+
+```{r removing rows,}
+NYPDdf <- NYPDdf[!grepl("UNKNOWN", NYPDdf$vicage),]
+NYPDdf <- NYPDdf[!grepl("1022", NYPDdf$vicage),]
+NYPDdf <- NYPDdf[!grepl("UNKNOWN", NYPDdf$vicrace),]
+NYPDdf <- NYPDdf[!grepl("U", NYPDdf$vicsex),]
+```
+
+## Part 4: Analyzing the Data
+
+<font size="5"> Step 1: Summarizing the Data </font>
+
+The first step in data analysis is to summarize the data to look for patterns, missing values, any irregularities and any information that may have been missed while cleaning the data.  
+
+```{r summary,}
+summary(NYPDdf)
+```
+<font size="5"> Step 2: Grouping data by year </font>
+
+The data needs to be grouped by year so that we can look at it objectively and see how shooting incidents have changed from year to year.  We could always compare the data to outside sources, such as how laws in NYC have changed with respect to crime, how police funding has changed, etc.  This is currently out of scope of this study, but grouping shooting incidents by year gives us a baseline to compare a multitude of other variables. 
+
+```{r group by year,}
+NYCrimeYearly <- NYPDdf %>% group_by( year, boro, murflag, vicage, vicsex, vicrace,weekDay ) %>% summarize( incidents = n())
+```
+
+ <font size="5"> Step 3: Plotting the data </font>
+ 
+ Plotting the data is one of the best ways to examine the data and obtain information about shooting incidents in NYC.  It is easier to examine graphs, compared to tables or lists of data.  These visuals will help us understand what is going on within the dataframe. 
+
+ <font size="4"> Plot 1: Shootings by Year </font>
+
+```{r plot 1, echo=FALSE}
+plot1 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=murflag ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents (2006-2022) - Murder breakdown.",                    fill="Murder Occured") + theme(legend.position = "bottom",                               plot.title.position = 'plot', plot.title = element_text(hjust = 0.5))
+plot(plot1)
+```
+From plot 1, We can see that shootings reached a high of 2055 in 2006, dropped to a low of 958 in 2018 and climbed back to 1716 in 2022. 
+
+ <font size="4"> Plot 2 - Shootings By Borough by Year </font>
+
+```{r plot 2, echo=FALSE}
+plot2 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=boro ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents by city Borough (2006-2022)",                        fill="") + theme(legend.position = "bottom", plot.title.position =                       'plot', plot.title = element_text(hjust = 0.5)) 
+plot(plot2)
+```
+
+From plot 2, We can see that shootings occured most in Brooklyn (10,933), followed by Bronx (7937), then Queens (4094), then Manhattan (3572) and finally, Staten Island (776). 
+
+ <font size="4"> Plot 3 - Shootings By Victim Age </font>
+
+```{r plot 3, echo=FALSE}
+plot3 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=vicage ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents by Victim Age (2006-2022)",                          fill="Victim Age") + theme(legend.position = "bottom",                                   plot.title.position = 'plot', plot.title = element_text(hjust = 0.5)) 
+plot(plot3)
+```
+
+From plot 3, we can see that the most shootings happened to 25-44 year olds (12,281), the second most to 18-24 year olds (10,086), the third most to <18 year olds (2839), then to 45-64 year odls (1863) and finally to people over 65 (181).
+
+ <font size="4"> Plot 4 - Shootings By Victim Race </font>
+
+```{r plot 4, echo=FALSE}
+plot4 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=vicrace ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents by Victim Race (2006-2022)",                         fill="Victim Race") + theme(legend.position = "bottom",                                 plot.title.position = 'plot', plot.title = element_text(hjust = 0.5)) 
+plot(plot4)
+```
+
+From plot 4, we can see that the most shootings happened to Black people (19,420), followed by White Hispanics (4041), Black Hispanics (2642), White people (684), Asian / Pacific Islanders (403), Unknown race (50) and lastly, American Indian / Alaskan Native (10)
+
+ <font size="4"> Plot 5 - Shootings By Victim Sex </font>
+
+```{r plot 5, echo=FALSE}
+plot5 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=vicsex ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents by Victim Sex (2006-2022)",                          fill="Victim Sex") + theme(legend.position = "bottom",                                   plot.title.position = 'plot', plot.title = element_text(hjust = 0.5)) 
+plot(plot5)
+```
+
+From plot 5, we can see that the most shootings happened males (24,634), with females accounding for 2610 of the shootings.
+
+ <font size="4"> Plot 6 - Shootings By Day of the Week </font>
+
+```{r plot 6, echo=FALSE}
+plot6 <- ggplot(data=NYCrimeYearly, aes( x=year, y=incidents, fill=weekDay ) ) +
+                geom_bar(stat="identity")+
+                labs(title= "NYC Shooting Incidents by Victim Sex (2006-2022)",                          fill="Day of Week") + theme(legend.position = "bottom",                                  plot.title.position = 'plot', plot.title = element_text(hjust = 0.5)) 
+plot(plot6)
+```
+
+From plot 6, we can see that the most shootings happened on Sundays (5448), followed by Saturday (5181), Monday (3867), Friday (3578), Tuesday (3157), Thursday (3027), Wednesday (2992).
+
+## Part 5: Building a Model
+
+We can build a simple regression model using some of the variables in the dataframe.  Starting off with a simple model, we can see how much of the data can be explained using just the variables Week Day and Borough.  
+
+```{r model, echo=FALSE}
+MODEL1df <- NYPDdf %>% group_by(weekDay, boro) %>% summarize( incidents = n())
+model1 <- lm(data=MODEL1df, formula = incidents ~ weekDay+boro )
+rsqModelV <- c( summary(model1)$adj.r.squared )
+formModelV <- c( summary(model1)$call )
+summary(model1) 
+```
+
+The adjusted R squared value is 0.9313.  This means that these two variables, Week Day and Borough, account for about 93.13% of the variation in the data.  
+
+## Part 6: Conclusions
+
+After initial analysis, we have observed that shooting incidents peaked in 2006 and seemed to drop consistently until about 2019. There was a sharp increase in 2020.  The reason for the increase is unknown, and may be related to the COVID pandemic, but additional research is necessary to understand this increase. 
+
+We also found that Brooklyn and the Bronx accounted for almost 70% of all the shootings. Further research into the socioeconomic conditions of these boroughs, the amount of police funding, experience of police officers, etc could be conducted to see what the causation of the high number of shootings in these two boroughs compared to in the other four boroughs. 
+
+When analysizing victims' ages, we see that a vast majority of shootings targeted people 44 and younger.  There can be numerous reasons for this, including their socioeconomic standing, their affinity for nightlife, peer pressure, etc.  Further research is needed to understand why the younger age group is shot more than people over 44.  
+
+Analysis based on race shows that police overwhelmingly shot black people. Again, further research is necessary to understand why. Improper training and systemic racism could be leading reasons for the huge discrepency between Black shootings and shootings of other races. 
+
+Analysis of shootings by sex show that the overwhelming majority of shootings targeted men.  Again, further research is necessary, but males may show more aggressive/macho behavior, be perceived as more of a threat to police officers, etc. 
+
+We see that most shootings occur on Sundays.  We could split the days into hours to see if a moajority of Sunday shootings occur between midnight and 6am, meaning that most shootings, in fact, occur on Saturday night.  This is probably the case since more people are out, going to bars and clubs and consuming alcohol and other drugs.  
+
+The simple regression model shows that 93.13% of variation in the model can be explained by just two variables: Week Day and Borough. 
+
+## Part 7: Study Biases
+
+Personal bias occurs when data scientists jump to conclusions while reading the data without letting the data dictate what information is actually present.  For example, the spike in the number of shootings in 2020 conincided with a global pandemic and general stay-at-home orders.  This seems the most likely rise in shootings, since domestic violence would have increased since people were not allowed to leave their home.  However, the data does not explicitly state this.  Other personal biases that could enter the study arise from following the news, especially topics that trended in the last few years including "Black Lives Matter" and "Defund the Police".  It is difficult to see data that shows young, black men were the most frequent victims by a lot without suspecting systemic racism, undertrained and undereducated police forces, socioeconomic inequities, etc were at least partially responsible.  
+
+Biases were limited by stressing that further research is needed before we can truly understand why the data says what it says.  We know young black men were the most shot demographic, but we do not know why, without additional research. 
+
+## Part 8: Calculations
+
+Calculating values from plot 1 - Shootings by Year
+
+```{r calc1 }
+Total06 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$year=="2006"] )
+Total18 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$year=="2018"] )
+Total22 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$year=="2022"] )
+
+Total06
+Total18
+Total22
+```
+
+Calculating values from plot 2 - Shootings by Borough
+
+```{r calc2 }
+TotalBronx<- sum( NYCrimeYearly$incidents[ NYCrimeYearly$boro=="BRONX"] )
+TotalBrook <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$boro=="BROOKLYN"] )
+TotalMan <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$boro=="MANHATTAN"] )
+TotalQueen<- sum( NYCrimeYearly$incidents[ NYCrimeYearly$boro=="QUEENS"] )
+TotalStaten <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$boro=="STATEN ISLAND"] )
+
+TotalBronx
+TotalBrook
+TotalMan
+TotalQueen
+TotalStaten
+```
+
+Calculating values from plot 3 - Shooting Victims by Age
+
+```{r calc3 }
+Total18 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicage=="<18"] )
+Total24 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicage=="18-24"] )
+Total44 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicage=="25-44"] )
+Total64 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicage=="45-64"] )
+Total65 <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicage=="65+"] )
+
+Total18
+Total24
+Total44
+Total64
+Total65
+```
+
+Calculating values from plot 4 - Shooting victims by Race
+
+```{r calc4 }
+TotalNat <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="AMERICAN INDIAN/ALASKAN NATIVE"] )
+TotalAsian <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="ASIAN / PACIFIC ISLANDER"] )
+TotalBlack <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="BLACK"] )
+TotalBlackH <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="BLACK HISPANIC"] )
+TotalUnknown <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="UNKNOWN"] )
+TotalWhite <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="WHITE"] )
+TotalWhiteH <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicrace=="WHITE HISPANIC"] )
+
+TotalNat
+TotalAsian
+TotalBlack
+TotalBlackH
+TotalUnknown
+TotalWhite
+TotalWhiteH
+```
+
+Calculating values from plot 5 - Shooting victims by Sex
+
+```{r calc5 }
+TotalM <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicsex=="M"] )
+TotalF <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$vicsex=="F"] )
+
+TotalM
+TotalF
+```
+
+Calculating values from plot 6 - Shootings by Weekday
+
+```{r calc6 }
+TotalMon <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Monday"] )
+TotalTues <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Tuesday"] )
+TotalWed <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Wednesday"] )
+TotalThurs <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Thursday"] )
+TotalFri <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Friday"] )
+TotalSat <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Saturday"] )
+TotalSun <- sum( NYCrimeYearly$incidents[ NYCrimeYearly$weekDay=="Sunday"] )
+
+TotalMon
+TotalTues
+TotalWed
+TotalThurs
+TotalFri
+TotalSat
+TotalSun
+```
